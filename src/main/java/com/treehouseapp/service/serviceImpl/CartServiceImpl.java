@@ -1,0 +1,233 @@
+package com.treehouseapp.service.serviceImpl;
+
+import com.treehouseapp.exception.BadRequestException;
+import com.treehouseapp.model.carts.Cart;
+import com.treehouseapp.model.carts.CartItem;
+import com.treehouseapp.payload.ViewCartResponse;
+import com.treehouseapp.repository.CartItemRepository;
+import com.treehouseapp.service.serviceInterfaces.CartService;
+import com.treehouseapp.model.enums.UserRole;
+import com.treehouseapp.model.flowers.MenuItem;
+import com.treehouseapp.model.users.User;
+import com.treehouseapp.dto.CartDTO;
+import com.treehouseapp.payload.AllCartItems;
+import com.treehouseapp.payload.CartResponse;
+import com.treehouseapp.repository.CartRepository;
+import com.treehouseapp.repository.MenuItemRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+@Service
+public class CartServiceImpl implements CartService {
+
+    private final CartRepository cartRepository;
+    private final MenuItemRepository menuItemRepository;
+    private final CartItemRepository cartItemRepository;
+
+    @Autowired
+    public CartServiceImpl(CartRepository cartRepository, MenuItemRepository menuItemRepository,
+                           CartItemRepository cartItemRepository) {
+        this.cartRepository = cartRepository;
+        this.menuItemRepository = menuItemRepository;
+        this.cartItemRepository = cartItemRepository;
+    }
+
+
+    @Override
+    public void createCartForUser(User user) {
+        if (user.getRole().getName().equals(UserRole.USER)) {
+            Cart cart = new Cart();
+            cart.setUser(user);
+            cartRepository.save(cart);
+        }
+    }
+
+
+    @Override
+    public ResponseEntity<CartResponse> addToCart(CartDTO cartDTO, Long userId, Long menuId){
+        if(cartDTO.getQty() == null) throw new BadRequestException("Quantity cannot be null");
+        MenuItem product = menuItemRepository.findMenuItemById(menuId)
+                .orElseThrow((() -> new BadRequestException("Product not available")));
+        Cart cart = cartRepository.getByUser_Id(userId)
+                .orElseThrow(() -> new BadRequestException("Only users can add to cart"));
+        try {
+            List<CartItem> userCartItems = cartItemRepository.findAllByCart(cart);
+            if(userCartItems.isEmpty()){
+                addNewCartItem(cart,product, cartDTO.getQty());
+                int total = getTotalProduct(cart);
+                return  ResponseEntity.ok(new CartResponse(total,product.getName()+" added!"));
+            }
+        }
+        catch (Exception exception){
+            throw new BadRequestException(exception.getMessage());
+        }
+
+        try{
+            Optional<CartItem> cartItem = cartItemRepository.findByMenuIdAndCart(product, cart);
+            if(cartItem.isPresent()){
+//             increase qty
+                cartItem.get().setQuantity(cartDTO.getQty() + cartItem.get().getQuantity());
+                cartItemRepository.save(cartItem.get());
+                System.out.println("Got here");
+                int total = getTotalProduct(cart);
+                System.out.println("Didn't get here");
+                return  ResponseEntity.ok(new CartResponse(total,product.getName()+" increased"));
+            }
+        }catch(Exception exception){
+            throw new BadRequestException(exception.getMessage());
+
+        }
+
+        //saving a new cartItem
+        int total = 0;
+        try{
+            addNewCartItem(cart,product,cartDTO.getQty());
+             total = getTotalProduct(cart);
+
+        }catch (Exception exception){
+            throw new BadRequestException(exception.getMessage());
+        }
+        return  ResponseEntity.ok(new CartResponse(total,product.getName()+" added!"));
+
+    }
+
+    @Override
+    public ResponseEntity<CartResponse> reduceCartItemQty(Long userId, Long menuId){
+        MenuItem product = menuItemRepository.findMenuItemById(menuId)
+                .orElseThrow((() -> new BadRequestException("Product not available, "+menuId+" invalid")));
+        Cart cart = cartRepository.getByUser_Id(userId)
+                .orElseThrow(() -> new BadRequestException("Only users can add to cart"));
+        List<CartItem> userCartItems = cartItemRepository.findAllByCart(cart);
+        if(userCartItems.isEmpty()){
+            int total = getTotalProduct(cart);
+            return  ResponseEntity.ok(new CartResponse(total,"No item In cart"));
+        }
+
+        Optional<CartItem> cartItem = cartItemRepository.findByMenuIdAndCart(product, cart);
+        if(cartItem.isPresent()){
+            if(cartItem.get().getQuantity() == 1){
+                cartItemRepository.delete(cartItem.get());
+                int total = getTotalProduct(cart);
+                return  ResponseEntity.ok(new CartResponse(total,product.getName()+" deleted!"));
+            }
+            cartItem.get().setQuantity(cartItem.get().getQuantity() - 1);
+            cartItemRepository.save(cartItem.get());
+        } else{
+            throw new BadRequestException("Product not in cart");
+        }
+        int total = getTotalProduct(cart);
+        return  ResponseEntity.ok(new CartResponse(total,product.getName()+" reduced to!"
+                +cartItem.get().getQuantity()));
+    }
+
+
+    @Override
+    public ResponseEntity<CartResponse> updateCartQuantity(Long userId, Long menuId, Integer qty){
+        MenuItem product = menuItemRepository.findMenuItemById(menuId)
+                .orElseThrow((() -> new BadRequestException("Product not available, "+menuId+" invalid")));
+        Cart cart = cartRepository.getByUser_Id(userId)
+                .orElseThrow(() -> new BadRequestException("Only users can add to cart"));
+        List<CartItem> userCartItems = cartItemRepository.findAllByCart(cart);
+        if(userCartItems.isEmpty()){
+            int total = getTotalProduct(cart);
+            return  ResponseEntity.ok(new CartResponse(total,"No item In cart"));
+        }
+
+        Optional<CartItem> cartItem = cartItemRepository.findByMenuIdAndCart(product, cart);
+        if(cartItem.isPresent()){
+//            if(cartItem.get().getQuantity() == 1){
+//                cartItemRepository.delete(cartItem.get());
+//                int total = getTotalProduct(cart);
+//                return  ResponseEntity.ok(new CartResponse(total,product.getName()+" deleted!"));
+//            }
+            cartItem.get().setQuantity(qty);
+            cartItemRepository.save(cartItem.get());
+        } else{
+            throw new BadRequestException("Product not in cart");
+        }
+        int total = getTotalProduct(cart);
+        return  ResponseEntity.ok(new CartResponse(total,product.getName()+" updated to!"
+                +cartItem.get().getQuantity()));
+    }
+
+    @Override
+    public ResponseEntity<CartResponse> deleteCartItem(Long userId, Long menuId){
+        MenuItem product = menuItemRepository.findMenuItemById(menuId)
+                .orElseThrow((() -> new BadRequestException("Product not available, "+menuId+" invalid")));
+        Cart cart = cartRepository.getByUser_Id(userId)
+                .orElseThrow(() -> new BadRequestException("Only users can add to cart"));
+        List<CartItem> userCartItems = cartItemRepository.findAllByCart(cart);
+        List<CartItem> menuCartItems = cartItemRepository.findAllByMenuId_Id(menuId);
+
+        if(userCartItems.isEmpty() || menuCartItems.isEmpty()){
+          throw  new BadRequestException(product.getName()+" not in the Users cart");
+        }
+        Optional<CartItem> cartItem = cartItemRepository.findByMenuIdAndCart(product, cart);
+        cartItemRepository.delete(cartItem.get());
+        int total = getTotalProduct(cart);
+        return  ResponseEntity.ok(new CartResponse(total,cartItem.get().getMenuId().getName()+" deleted"));
+    }
+    @Override
+    public ResponseEntity<AllCartItems> findAllProductsByUser(Long userId){
+        AllCartItems allCartItems = new AllCartItems();
+        allCartItems.setUsersCartItems(getAllProductsByUser(userId));
+        return  new ResponseEntity<>(allCartItems, HttpStatus.OK);
+
+    }
+
+
+    private void addNewCartItem( Cart cart, MenuItem product, Integer quantity){
+        CartItem cartItem = new CartItem();
+        cartItem.setCart(cart);
+        cartItem.setMenuId(product);
+        cartItem.setQuantity(quantity);
+        cartItemRepository.save(cartItem);
+    }
+
+
+
+    public List<ViewCartResponse> getAllProductsByUser( Long userId) {
+        Cart cart = cartRepository.getByUser_Id(userId)
+                .orElseThrow(() -> new BadRequestException("Only users can add to cart"));
+        List<ViewCartResponse> usersCartItem = new ArrayList<>();
+        List<CartItem> cartItems = cartItemRepository.findAllByCart_Id(cart.getId());
+        if (cartRepository.existsById(cart.getId())) {
+            for (CartItem item : cartItems) {
+                ViewCartResponse cartResponse = new ViewCartResponse();
+                cartResponse.setCartItemId(item.getId());
+                cartResponse.setProductId(item.getMenuId().getId());
+                cartResponse.setProductImage(item.getMenuId().getImage());
+                cartResponse.setProductName(item.getMenuId().getName());
+                cartResponse.setProductOwner(item.getCart().getUser()
+                .getLastName() + " " + item.getCart().getUser().getFirstName());
+                cartResponse.setProductPrice(item.getMenuId().getPrice());
+                cartResponse.setProductQuantity(item.getQuantity());
+                cartResponse.setAmount((double) item.getQuantity() * item.getMenuId().getPrice());
+                usersCartItem.add(cartResponse);
+
+            }
+            return usersCartItem;
+        }
+        throw new BadRequestException("Cart with id "+cart.getId()+" doesn't exist");
+    }
+
+    private int getTotalProduct(Cart cart){
+        int totalQuantity = 0;
+       List<CartItem> cartItems =  cartItemRepository.findAllByCart_Id(cart.getId());
+        System.out.println(">>>>>>>>>>>>>>"+cartItems);
+       for(CartItem cartItem: cartItems){
+           if(cartItem.getQuantity() != null){
+               totalQuantity += cartItem.getQuantity();
+           }
+       }
+        return totalQuantity;
+    }
+
+
+}
